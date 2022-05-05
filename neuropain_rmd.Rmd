@@ -1,0 +1,837 @@
+---
+title: 'Biostatistics project: Neuropathic pain'
+author: "Yael Rosen Lang"
+date: "10/17/2021"
+output:
+  rmdformats::readthedown
+---
+
+```{r setup, include=FALSE, results='asis', message=FALSE, warning=FALSE}
+library(rmdformats)
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, results='asis')
+library(ggplot2)
+library(summarytools)
+library(dplyr)
+library(tidyverse)
+library(performance) 
+library(interactions)
+library(sjPlot)
+library(pander)
+library(flextable)
+library(huxtable)
+library(ggpubr)
+library(Hmisc)
+library(MASS)
+library(caret)
+library(gridExtra)
+panderOptions("table.split.cells", Inf)
+library("readxl")
+data=read_excel(path='F:/My Documents/MPH/Biostatistics_projects/Neuropathic_Pain_Data.xlsx', na=c("-99", "NA"))
+```
+
+# Introduction  
+This study's goal is to investigate aspects of well being, health and pain in children and teenagers with neuropathic pain.  
+
+# Data preparation
+The data set consisted of 309 subjects. It was imported from excel to R (R Core Team (2020). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.)
+The data originated from 2 sources: CHOP and CCHMC. One subject was labeled as being part of the CHOP data set, although its study code and data collection characteristics indicated it was part of the CCHMC data set. The labeling was corrected. There were 171 subjects from the CCHMC source and 138 from the CHOP source.
+
+```{r }
+#renaming and formatting
+data$from_set<-factor(data$from_set, levels=c(0,1), labels=c("CHOP", "CCHMC"))
+#demographic parameters
+names(data)[names(data)=='socio02']<-'Age'
+names(data)[names(data)=='socio03']<-'Gender'
+data$Gender<-as.factor(data$Gender)
+data$Gender<-factor(data$Gender, levels=c(1,2), labels=c("Male", "Female"))
+label(data$yrs_diagnosed)<-"Time from diagnosis(years)"
+#clinical parameters
+names(data)[names(data)=='rf1c']<-'Diagnosis'
+data$Diagnosis<-as.factor(data$Diagnosis)
+data$Diagnosis<-factor(data$Diagnosis, levels=c(1,2), labels=c("Chronic pain condition", "JIA"))
+
+names(data)[names(data)=='rf3c']<-'JIA_type'
+#unifying levels 6 and 8 (10 subjects with "undifferentiated" and 2 with "other")
+data$JIA_type[data$JIA_type==8]<-6
+data$JIA_type<-factor(data$JIA_type, levels=c(1,2,3,4,5,6,7), labels=c("Not applicable", "Systemic", "Psoriatic", "Polyarthiritis", "Oligoarthritis", "Undifferentiated/other", "Enthesis"))
+label(data$JIA_type)<-"JIA type"
+
+names(data)[names(data)=='global_peds']<-'Health'
+#data$Health<-as.factor(data$Health)
+data$Health<-factor(data$Health, levels=c(0,1,2,3,4), labels=c("Excellent", "Very good", "Good", "Fair", "Poor"))
+label(data$Health)<-"Global health"
+
+names(data)[names(data)=='rf2c']<-'ICD9'
+#widespeard pain
+data<-data%>% mutate_at(c(201:261), ~replace(., is.na(.), 0))
+data$wspain<-rowSums(data[201:261])
+#summary(data$wspain)
+#hist(data$wspain)
+
+#pain behavior
+data<-data%>% mutate_at(c(72:93, 131:156), ~replace(., is.na(.), 0))
+data$pain_behavior<-rowSums(data[c(72:93, 131:156)])/48
+#summary(data$pain_behavior)
+#hist(data$pain_behavior)
+
+#pain catastrophizing
+data<-data%>% mutate_at(c(157:169), ~replace(., is.na(.), 0))
+data$pcs<-rowSums(data[c(157:169)])/13
+#summary(data$pcs)
+#hist(data$pcs)
+
+#pain intensity1 (range 0 to 10)
+data<-data%>% mutate_at(c(68:71), ~replace(., is.na(.), 0))
+data$pain_intensity1<-rowSums(data[c(68:71)])/4
+#summary(data$pain_intensity1)
+#hist(data$pain_intensity1)
+
+#pain intensity2 (range 0 to 4)
+data<-data%>% mutate_at(c(170:172), ~replace(., is.na(.), 0))
+data$pain_intensity2<-rowSums(data[c(64, 170:172)])/4
+#summary(data$pain_intensity2)
+#hist(data$pain_intensity2)
+
+#ggplot(data, aes(x=pain_intensity2))+geom_histogram(binwidth=1)#+xlab("Time from diagnosis(years)")+#ylab("number of subjects")+
+  #ggtitle("Distribution of time from diagnosis")
+
+
+#pain quality1 (range 0 to 4)
+data<-data%>% mutate_at(c(94:129), ~replace(., is.na(.), 0))
+data$pain_quality1<-rowSums(data[c(94:129)])/36
+#summary(data$pain_quality1)
+#hist(data$pain_quality1)
+
+#pain quality2 (range 0/1)
+data<-data%>% mutate_at(c(130,173:194), ~replace(., is.na(.), 0))
+data$pain_quality2<-rowSums(data[c(130, 173:194)])/23
+#summary(data$pain_quality2)
+#hist(data$pain_quality2)
+
+names(data)[names(data)=='peds_depression_8a_raw']<-'depression'
+names(data)[names(data)=='peds_fatigue_10a_raw']<-'fatigue'
+names(data)[names(data)=='peds_pain_interference_8a_raw']<-'interference'
+data$front_l<-log10(data$Frontpeds)
+data$back_l<-log10(data$Backpeds)
+label(data$depression)<-'Depression'
+label(data$fatigue)<-'Fatigue'
+label(data$pain_behavior)<-'Pain behavior'
+label(data$pain_intensity1)<-'Pain intensity (0-10)'
+label(data$interference)<-'Interference'
+label(data$pcs)<-'Pain Catastrophization Scale'
+label(data$wspain)<-'Widespread pain'
+
+```
+## Missing data
+There were discrepancies in data collection between the CCMHC and the CHOP data sources. 
+Subjects from the CCHMC source (171 out of 309 subjects, 55% of participants) had only basic demographic data (age and gender). For these subjects there was missing data for race, education, habitat and demographic information regarding the child's parent or guardian. In addition, CCHMC subjects had no information regarding comorbidities. 
+Visual pain map variables (selecting painful body parts on a front and back body map) had 12% and 22% missing data, respectively. There was also a discrepancy in missing data rates between diagnoses groups, and for these reasons these variables were not used in the analysis. 
+All other parameters had a negligible rate of missing data.
+
+The data was screened for out-of-range values, un-trusted values, data entry and formatting errors and inconsistencies. 
+For the JIA type parameter, levels "undifferentiated" and "other" were unified due to a small number of observations (10 and 2 respectively). 
+
+# Sample description
+The sample was described using the demographic and clinical parameters for which complete data was available. A comparison between the 2 data sets was performed using t-tests and Chi-square tests, to determine whether we can use the CHOP demographic data for analysis and extrapolate the conclusions for the entire data set.
+
+```{r table1, echo=FALSE}
+library(table1)
+#defining a function to compute p-value
+pvalue <- function(x, ...) {
+  # Construct vectors of data y, and groups (strata) g
+  y <- unlist(x)
+  g <- factor(rep(1:length(x), times=sapply(x, length)))
+  if (is.numeric(y)) {
+    # For numeric variables, perform a standard 2-sample t-test
+    p <- t.test(y ~ g)$p.value
+  } else {
+    # For categorical variables, perform a chi-squared test of independence
+    p <- chisq.test(table(y, g))$p.value
+  }
+  # Format the p-value, using an HTML entity for the less-than sign.
+  # The initial empty string places the output on the line below the variable label.
+  c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+
+
+
+table1(~ Gender + Age + yrs_diagnosed +Diagnosis+ JIA_type+ Health
+       | from_set, data=data, overall=F, extra.col=list(`P-value`=pvalue))
+
+```
+The two data sets are similar in gender ratios and global health, but are dissimilar in the subjects' distribution of age, time from diagnosis, diagnosis (JIA/chronic pain) and JIA type. We therefore can only rely on the parameters for which we have full data to describe our sample.
+
+```{r}
+table1(~ Gender + Age + yrs_diagnosed +Diagnosis+ JIA_type+ Health,
+     data=data, overall="Total")
+```
+
+**Gender**- The majority of our sample is female (79%). **Age** ranges between 8 and 19 years, with a mean and median of 14 years (mean's SD=2.72 y.).  
+```{r fig.height = 3, fig.width = 8}
+#histogram of age
+a<-ggplot(data, aes(x=Age))+geom_histogram(binwidth=1)+xlab("Age (years)")+
+  ggtitle("Distribution of age")
+
+#histogram of time from diagnosis
+y<-ggplot(data, aes(x=yrs_diagnosed))+geom_histogram(binwidth=1)+xlab("Time from diagnosis(years)")+ggtitle("Distribution of time from diagnosis")
+
+grid.arrange(a,y,ncol=2)
+```
+The mean **time from diagnosis** is 3.3 years (SD= 3.18, Median 2 y. Range (0,16)).
+**Diagnosis**- About half of the subjects are diagnosed with JIA, while the remainder are suffering from a chronic pain condition. 
+**JIA type** -Among the JIA patients the majority have psoriatic JIA (23% of subjects), oligoarthritis (12.6%) and other types have prevalence rates of 5% or lower.  
+```{r fig.height = 3, fig.width = 8}
+#histogram of global health
+ggplot(subset(data, !is.na(data$Health)), aes(x=Health))+geom_bar()+xlab("Pediatric global health")+#ylab("number of subjects")+
+  ggtitle("Distribution of global health")
+
+```
+**Global health**-most of the subjects are in good to excellent health.
+
+Data regarding **comorbidities** was available for the CHOP data source only (138 out of 309 subjects), and is described in the appendix as an illustration. This data does not represent the entire study population and will not be used in the analysis.
+
+### Summary
+Our cohort is predominantly female (79%) with equal amount of chronic pain and JIA patients. The age range is 8-19 years, the average age is 14 years (SD=2.72 y.) and age is approximately normally distributed. Average time from diagnosis is 3.3 years (SD=3.18 y.). Most of the subjects are in good to excellent health.
+
+# Pain Variables
+The following variables were created based on data collected regarding pain characteristics and pain-related scores:
+
+### Widespread pain
+This is an aggregating variable, summing up the number of painful body locations selected by the subject.
+```{r fig.height = 3, fig.width = 8}
+data<-data%>% mutate_at(c(201:261), ~replace(., is.na(.), 0))
+data$wspain<-rowSums(data[201:261])
+df<-data.frame(val = unclass(summary(data$wspain)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Widespread pain descriptive statistics" , row.names = FALSE)
+#summary(data$wspain)
+ggplot(data, aes(x=wspain))+geom_histogram(binwidth=1)+xlab("Widespread pain")+
+  ggtitle("Distribution of widespread pain")
+```
+
+### Pain behavior
+This is the average score on a 48-item questionnaire regarding the influence of pain on daily behavior (ranging 0-5).  
+```{r fig.height = 3, fig.width = 8}
+#pain behavior
+data<-data%>% mutate_at(c(72:93, 131:156), ~replace(., is.na(.), 0))
+data$pain_behavior<-rowSums(data[c(72:93, 131:156)])/48
+df<-data.frame(val = unclass(summary(data$pain_behavior))) %>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain behavior descriptive statistics", row.names = FALSE )
+ggplot(data, aes(x=pain_behavior))+geom_histogram(binwidth=1)+xlab("Pain behavior (0-5")+ ggtitle("Distribution of pain behavior")
+```
+
+### Pain catastrophizing scale
+This is the average score on a 13-item questionnaire assessing catastrophic thinking related to pain (ranging 0-4).  
+```{r fig.height = 3, fig.width = 8}
+data<-data%>% mutate_at(c(157:169), ~replace(., is.na(.), 0))
+data$pcs<-rowSums(data[c(157:169)])/13
+df<-data.frame(val = unclass(summary(data$pcs)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain catastrophizing scale descriptive statistics", row.names = FALSE )
+ggplot(data, aes(x=pcs))+geom_histogram(binwidth=1)+xlab("Pain catastrophizing scale (0-4)")+ ggtitle("Distribution of pain catastrophizing scale")
+```
+
+### Pain intensity 1 (range 0 to 10)
+This is the average score on an 4-item questionnaire regarding pain intensity (ranging 0-10).   
+```{r}
+data<-data%>% mutate_at(c(68:71), ~replace(., is.na(.), 0))
+data$pain_intensity1<-rowSums(data[c(68:71)])/4
+df<-data.frame(val = unclass(summary(data$pain_intensity1)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain intensity 1 (0-10) descriptive statistics" , row.names = FALSE)
+ggplot(data, aes(x=pain_intensity1))+geom_histogram(binwidth=1)+xlab("Pain intensity 1 (0-10)")+ ggtitle("Distribution of pain intensity 1 (0-10)")
+```
+
+### Pain intensity 2 (range 0 to 4)
+This is the average score on an 3-item questionnaire regarding pain intensity (ranging 0-4).   
+```{r}
+data<-data%>% mutate_at(c(170:172), ~replace(., is.na(.), 0))
+data$pain_intensity2<-rowSums(data[c(170:172)])/3
+df<-data.frame(val = unclass(summary(data$pain_intensity2)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain intensity 2 (0-4) descriptive statistics" , row.names = FALSE)
+ggplot(data, aes(x=pain_intensity2))+geom_histogram(binwidth=1)+xlab("Pain intensity 2 (0-4)")+ ggtitle("Distribution of pain intensity 2 (0-4)")
+```
+
+### Pain quality 1 (range 0 to 4)
+This is the average score on an 36-item questionnaire regarding pain quality (ranging 0-4).   
+```{r}
+data<-data%>% mutate_at(c(94:126, 128:130), ~replace(., is.na(.), 0))
+data$pain_quality1<-rowSums(data[c(94:126, 128:130)])/36
+data$pain_quality1[data$pain_quality1>4]<-NA
+df<-data.frame(val = unclass(summary(data$pain_quality1)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain quality 1 (0-4) descriptive statistics" , row.names = FALSE)
+ggplot(data, aes(x=pain_quality1))+geom_histogram(binwidth=1)+xlab("Pain quality 1 (0-4)")+ ggtitle("Distribution of pain quality 1 (0-4)")
+```
+
+### Pain quality 2 (range 0-1)
+This is the average score on an 23-item questionnaire regarding pain quality (response yes/no).  
+```{r}
+data<-data%>% mutate_at(c(173:194), ~replace(., is.na(.), 0))
+data$pain_quality2<-rowSums(data[c(127,173:194)])/23
+df<-data.frame(val = unclass(summary(data$pain_quality2)))%>%round(digits=2)
+knitr::kable(t(df), align = "l", caption="Pain quality 2 (0-1) descriptive statistics" , row.names = FALSE)
+ggplot(data, aes(x=pain_quality2))+geom_histogram(binwidth=0.2)+xlab("Pain quality 2 (0-1)")+ ggtitle("Distribution of pain quality 2 (0-1)")
+```
+
+### Summary
+Most pain-related parameters (depression, fatigue, pain behavior, etc.) show a right asymmetrical distribution. This means that most of the subjects have low levels of depression, fatigue, etc., and there is a long tail of subjects with high levels.
+
+
+# 1. Prediction model for global health
+Global health is a 5-level response to the question "How would you say your health is?" (0=Excellent, 1=very good, 2= good, 4=fair, 5=poor).   
+```{r}
+knitr::kable(t(table(data$Health)), caption="Distribution of Global health", align="l") #col.names=c("Level", "Count"))
+```
+A model was developed for predicting global health.
+Two subjects who had missing data for global health were omitted, and our model was based on 307 subjects. 
+
+## Predictors
+In order to identify possible predictors for our model, the following parameters were examined for their correlation to global health.
+
+### Categorical variables
+we'll take a look at the cross-tabulation of gender and diagnosis with global health.
+```{r}
+##add table of diagnosis vs.  health with percentages and counts 
+knitr::kable(table(data$Gender, data$Health ), caption="Health by gender (p-value=0.386, Chi-squared statistic = 4.15)", align="l") 
+knitr::kable(table(data$Diagnosis, data$Health ), caption="Health by diagnosis (p-value<0.001, Chi-squared statistic= 29.15)", align="l")
+```
+
+The correlation between gender and health is not statistically significant. The correlation between health and diagnosis is statistically significant 
+Our outcome variable has 5 levels, some have sparse cell counts (17 observations total for level "5=poor"). Any categorical main effect or interaction in the model could result in empty or near-empty cells. In order to keep our model stable and valid it is best not to use these categorical predictors in our prediction models. 
+
+### Continuous variables
+We will examine possible continuous predictors and look for distribution differences between the 5 levels of global health. A good predictor is one for which the distributions of different levels have minimal overlap, enabling separation of the levels. 
+```{r}
+age<-ggboxplot(subset(data, !is.na(data$Health)), x = "Health", y = "Age",
+          color = "Health", add = "jitter", shape = "Health")+
+  ylab("Age (years)")
+#poor health is related to higher ages
+
+depr<-ggboxplot(subset(data, !is.na(data$Health)), x = "Health", y = "depression",
+          color = "Health", add = "jitter", shape = "Health")+
+  ylab("Depression")
+#direct correlation, long right tails in each health category
+
+fati<-ggboxplot(subset(data, !is.na(data$Health)), x = "Health", y = "fatigue",
+          color = "Health", add = "jitter", shape = "Health")+
+  ylab("Fatigue")
+
+library(gridExtra)
+grid.arrange(depr, fati, ncol=2)
+
+```
+
+Fatigue (right) would be a better predictor than depression (left), as it has a slightly better separation between levels. Most of our potential predictors have a graph that is somewhere in between depression and fatigue- a positive trend, usually proportional (as we would expect from an ordinal scale) and a lot of overlap between levels due to long tails. Levels "Very good", "Good" and "Fair" can't be differentiated in most cases, and we can notice again the scarcity of level "Poor". This would hamper our model's accuracy.
+Most variables act similarly and are possibly correlated, and multicollinearity will be assessed and addressed. 
+
+## Ordinal logistic regression models
+Since our outcome variable is ordinal, we will use ordinal logistic regression to fit our prediction models.
+One model included predictors age, depression, fatigue, pain intensity, pain behavior an interference.
+A second model was fitted with 3 predictors for parsimony: fatigue, depression and age that were chosen due to a low correlation between them and statistical significance as predictors in the model.
+
+```{r}
+m1 <- polr( Health~ depression+ fatigue+pain_behavior+ Age+interference+pain_intensity1, data, Hess=TRUE)
+#summary(m1)
+#AIC=817
+
+m2 <- polr(Health ~ fatigue + pain_intensity1+ Age  , data, Hess=TRUE)
+#summary(m2)
+#model_performance(m2)
+#brant(m2)
+tab_model(m1, m2, show.ci = FALSE, show.re.var= FALSE, #show.r2=TRUE,  
+          show.aic=TRUE, #show.dev=TRUE,
+          title="Global health prediction models",
+   #       pred.labels =c("(Intercept)", "Excellent|Very good", "Very good|Good", "Good|Fair", "Fair|Poor", "Depression", "Fatigue", "Pain behavior", "Age", "interference", "Pain intensity"),
+          dv.labels=c("Model 1", "Model 2"))
+```
+**$R^2$ Nagelkerke** is a pseudo-$R^2$ metric for model prediction assessment. Model 1 has a slightly better score.  
+**AIC**= Akaike Information Criterion is another metric for model comparison. It estimates the model's prediction ability and penalizes a higher number of predictors. According to AIC the model 2 is slightly better.
+
+Ordinal logistic models can also be assessed with the surrogate residuals method, which detects model misspecifications.
+
+```{r}
+library(sure)
+m1qq<-autoplot.polr(m1, what = "qq")+ggtitle("Model 1: Residuals Q-Q plot")
+m1fit<-autoplot.polr(m2, what = "fitted")+ggtitle("Model 1: Residuals vs. fitted")
+
+m2qq<-autoplot.polr(m1, what = "qq")+ggtitle("Model 2: Residuals Q-Q plot")
+m2fit<-autoplot.polr(m2, what = "fitted")+ggtitle("Model 2: Residuals vs. fitted")
+
+grid.arrange(m1qq, m1fit, ncol=2)
+grid.arrange(m2qq, m2fit, ncol=2)
+
+
+```
+In the Quantile-quantile plots (left) the surrogate residuals seem to be aligned with the normal distribution diagonal trend line, and their distribution seems random in the residuals vs. fitted plot (right). We can conclude that our models are valid.
+
+### Model assumptions
+Variation inflation factor (VIF) was calculated for all predictors to detect **multicollinearity**. A VIF>5 can be considered a cause for concern, and VIF=1 is considered optimal. for the first model, one variable had a VIF higher than 5 (interference, VIF=5.5). In the second model, the highest VIF score was 1.77, which is very good. 
+Multicollinearity affects the model's coefficient estimates and does not affect the model's prediction ability or reliability, so we can continue in the assessment of this model.
+
+Ordinal regression models assume **Proportional odds**, meaning that the relationship between each pair of outcome groups is the same. The proportional odds assumption was tested using Brant test, and the assumption was met for both models.
+
+## Models' performance
+To evaluate our models' performance , the data set was randomly split into a training set that was used to build the models, and a test set, that was used to assess our models' predictive power. This method aids in minimizing model over-fitting. The predicted health status was compared to the actual health status and accuracy was defined as the percent of correct predictions. This procedure was repeated 1,000 times with randomly picked training and test sets, allowing us to obtain an average accuracy rate with a 95% confidence interval for each model.  
+Model 1 achieved an average accuracy rate of 38.2% (95% CI: 37.9%-38.6%).  
+Model 2 achieved an average accuracy rate of 38.3% (95% CI: 38%-38.7%).  
+```{r}
+
+m<-c("Model 1","Model 2" )
+min<-c("0.220", "0.203")
+avg<-c("**0.386**","**0.383**")
+max<-c("0.542", "0.559")
+lci<-c("0.379", "0.380")
+uci<-c("0.386", "0.387")
+df<-cbind(m,min, avg, max, lci, uci)
+knitr::kable(df, col.names=c("", "Min.", "Average", "Max.", "2.5% CI", "97.5% CI"), 
+             align = "l", caption="Prediction Models' accuracy statistics" )
+```
+
+This accuracy rate is low, so we will try another approach. If we assume linear correlations, we can use the LDA method. **Linear Discriminant Analysis** finds the optimal separation between groups or levels by identifying a linear combination of a set of predictors.
+an LDA model with predictors age, fatigue, pain intensity, depression, pain behavior, interference, PCS and widespread pain was tested with a training set and a test set.  
+The overall accuracy of the model was 0.305 (95% Ci: 0.192, 0.439).  
+This model is not better than our previous models, but the LDA method gives us further insight.  
+Below is a table of the classification made by the model:
+```{r}
+#library(MASS)
+set.seed(310)
+training.samples <- data$Health %>% createDataPartition(p = 0.8, list = FALSE)
+train.data  <- data[training.samples, ]
+test.data <- data[-training.samples, ]
+
+#model<-lda(Health ~ fatigue + pain_intensity1+ Age  , data=train.data, Hess=TRUE)
+#model<-lda(Health ~ fatigue , data=train.data, Hess=TRUE)
+model<-lda(Health ~ depression+ fatigue+pain_behavior+ Age+interference+pain_intensity1+ 
+             pcs+wspain, data=train.data, Hess=TRUE)
+
+# Make predictions on the test data
+predictions <- model %>% predict(test.data)
+# Model accuracy
+conf<-confusionMatrix(predictions$class, test.data$Health)
+knitr::kable(conf$table, caption="LDA model: prediction vs. reference")
+```
+We can see that the model managed to classify level "Excellent" relatively well, but performed worse as the levels go up, failing completely to identify level "Poor". This might be due to the low number of observations for these levels (43 and 17 respectively). When cross-validating a model using a test and train sets, it might fail to detect scarce levels due to insufficient examples in the train set. 
+
+## Conclusions
+Our models achieved an accuracy rate of 38% at best. In order to fit an accurate and robust prediction model it would be advisable to use a much larger sample size that will ensure there are no sparse cells and provide enough statistical power. In addition, it is recommended to include other variables that are not collinear and which provide discriminative information. Another possibility is to reconsider the outcome variable scale. A 3-level scale may be easier to discern than a 5-level scale.
+
+# 2. Prediction model for Diagnosis
+In our cohort there are 2 diagnosis groups: chronic pain condition and JIA. Our outcome variable is binary so we will use logistic regression for our prediction model.  
+Subjects with missing data were omitted, and the model was based on 306 subjects.
+
+## Predictors
+In order to identify possible predictors, the association between diagnosis and relevant variables was explored. Continuous variables were tested by t-tests, and categorical variables were tested by Chi-squared tests.
+```{r}
+library(table1)
+table1(~ Gender + Age + yrs_diagnosed +depression+ fatigue+
+         pain_behavior+ pain_intensity1+ interference+ pcs+wspain
+       | Diagnosis, data=data, overall=F, extra.col=list(`P-value`=pvalue))
+```
+
+**Gender** was significantly correlated to diagnosis (p-value<0.001, $\chi$^2^=18.12), with females more likely to suffer chronic pain than males.  
+The mean **Age** for subjects with JIA was 12.8 years, and the mean age for subjects with chronic pain was 14.8 years. The difference between the means was statistically significant (p-value<0.001, t=7.07).  
+**Time from diagnosis** was higher in subjects with JIA- 4.8 years on average, compared to 1.8 years for subjects with chronic pain.
+
+**Pain-related variables** (depression, fatigue, interference, widespread pain, pain behavior, pain intensity and pain catastrophization scale) were all significantly correlated to diagnosis with p-value<0.001. 
+
+**Key findings**  
+Chronic pain patients had higher scores than JIA patients in all parameters, except for time from diagnosis, which was shorter on average for chronic pain patients. Chronic pain patients were also more likely to be female and older than JIA patients.
+
+The variables were also examined for possible correlations, with diagnosis as a moderator, to detect interactions for the model.  
+
+**Time from diagnosis and pain intensity** -The correlation of pain intensity and time from diagnosis is different for JIA and chronic pain patients. It appears that subjects with Chronic pain condition in this cohort are relatively newly diagnosed, and there seems to be a negligible correlation between pain intensity and time from diagnosis for these patients.  
+Subjects with JIA in this cohort have been sick for a few years, and there may be a positive correlation between pain intensity greater than 5 and a longer duration of illness. 
+
+```{r}
+ggplot(data, aes(x=pain_intensity1, y=yrs_diagnosed, color=Diagnosis))+geom_smooth(method ='loess',span =2, na.rm=TRUE)+scale_color_manual(values=c("#00AFBB", "#E7B800"))+
+  ylab("Tome from diagnosis (years)")+
+  xlab("Pain intensity (0-10)")+
+  ggtitle("Pain intensity vs. time from diagnosis, by diagnosis")
+
+```
+
+
+**Gender and depression** - the distribution of depression by Diagnosis is different for males and females.
+For JIA patients, the distribution for males is more left-skewed compared to females'. For chronic pain patients, the distribution for females is more left-skewed than the males'.
+
+```{r}
+ggdensity(data, x = "depression",
+          add = "mean", rug = TRUE,
+          color = "Gender", fill = "Gender",
+          palette = c("lightblue", "pink"))+
+  xlab("Depression")+
+  ggtitle("Distribution of depression by diagnosis and gender")+facet_grid(.~Diagnosis)
+
+
+```
+These interactions will be considered in our prediction models.
+
+## Logistic regression models
+
+Several models were built and tested based on these predictors and possible interactions, and their accuracy was assessed. The 2 most accurate models will be presented.   
+The first model included demographic variables age, gender, time from diagnosis and predictors depression, widespread pain, fatigue, pain intensity and pain behavior.  
+The second model included all these variables and two interactions: an interaction between gender and depression, and between time from diagnosis and pain intensity.
+```{r}
+#model 4
+m1<-glm(Diagnosis~Age+Gender+yrs_diagnosed+depression+wspain+fatigue+pain_intensity1+pain_behavior, data, family=binomial)
+
+#model 5
+m2<-glm(Diagnosis~Age+Gender*depression+wspain+pain_behavior+fatigue+pain_intensity1*yrs_diagnosed, data, family=binomial)
+
+tab_model(m1, m2, show.ci = FALSE, show.re.var= FALSE, show.r2=TRUE,  
+          show.aic=TRUE, #show.dev=TRUE,
+          title="Diagnosis prediction models",
+          pred.labels =c("(Intercept)", "Age", "Gender female", "Time from diagnosis", "Depression", "widespread pain", "Fatigue", "Pain intensity","Pain behavior", "Gender female:depression", "Pain intensity:time" ),
+          dv.labels=c("Model 1", "Model 2"))
+```
+The second model seems better than the first- is has a lower AIC and a higher $R^2$ Tjur, which is a measure of predictive power for logistic regression models. In addition, the interactions are statistically significant. The models' assumption were met.  
+We will test both models to compare their accuracy in predicting the diagnosis.
+
+## Models' performance
+The models' performance was tested using ROC curve (Receiver operator characteristics Curve), which is a graphical summary showing the proportion of true positives and false positives at all possible values of probability cutoff. The ROC curve will allow us to identify the optimal threshold value for classification, which is a trade-off between sensitivity and specificity.
+
+To evaluate our models, the data set was split into a training set that was used to build the models, and a test set, that was used to assess our models' predictive power. This method aids in minimizing model over-fitting. 
+
+```{r}
+md1<-c("Model 1" ,"**83.6%**", "85.6%", "83.8%", "0.930", "0.512")
+md2<-c("Model 2","**90.2%**", "88.4%", "85.6%", "0.939" ,"0.491")
+df<-t(cbind(md1, md2))
+knitr::kable(df, caption="Model diagnostics", col.names = c("Model", "Accuracy", "Specificity", "Sensitivity","AUC", "ROC threshold"), row.names = FALSE)
+```
+
+The first model succeeded in predicting the diagnosis in the test data set in 83.6% of the cases.   
+The second model had a 90.2% success rate.
+
+```{r}
+library(pROC)
+model<-m2
+set.seed(12)
+training.samples <- data$Diagnosis %>% createDataPartition(p = 0.8, list = FALSE)
+train.data  <- data[training.samples, ]
+test.data <- data[-training.samples, ]
+data$fitted.results <- predict(model,newdata=data, type='response', allow.new.levels = TRUE)
+#calculating and plotting ROC and AUC
+roc_obj <- roc(data$Diagnosis, data$fitted.results)
+plot(roc_obj, print.thres = "best",print.auc=T, main="ROC curve for model 2")
+#coords(roc_obj, "best", "threshold")
+#spe:0.863, sen: 0.85, AUC=0.935
+#probabilities <- model %>% predict(test.data, type = "response")
+#predicted.classes <- ifelse(probabilities > 0.491, 1, 0)
+#test<-as.numeric(test.data$Diagnosis)-1
+#mean(predicted.classes == test)
+
+```
+
+
+The **optimal threshold** identified by the ROC curve was 0.49.   
+**AUC**-Area Under the Curve values range between 0.5 and 1.00. AUC>0.8 is an indication of a good classifier. For our model, the AUC for the train data is 0.939 which is very good.   
+The model's **specificity** is 88.3% and **sensitivity** is 85.6%.   
+The model's **accuracy** is 90.2%.   
+**F1 or F score** is another measure of accuracy, balancing the model's sensitivity and precision. The maximum value of F1 is 1.00, representing perfect precision and sensitivity. Our model's F1 is 0.897. 
+
+The model succeeded in predicting the diagnosis in the test data, which means it is not over-fitted, and its diagnostic parameters are good.
+The trade-off between sensitivity and specificity can be altered by changing the threshold for classification, depending on how much error we can tolerate in false positives or false negatives.
+
+### Interpretation of the model's coefficients
+```{r}
+#model 5
+m2<-glm(Diagnosis~Age+Gender*depression+wspain+pain_behavior+fatigue+pain_intensity1*yrs_diagnosed, data, family=binomial)
+
+tab_model(m2, show.ci = FALSE, show.re.var= FALSE, 
+          title="Diagnosis prediction model",
+          pred.labels =c("(Intercept)", "Age", "Gender female", "Time from diagnosis", "Depression", "widespread pain", "Fatigue", "Pain intensity","Pain behavior", "Gender female:depression", "Pain intensity:time" ))
+
+
+```
+
+**Age**- the odd for JIA vs. chronic pain decreases by 25% for each additional year of age.  
+The older you are, the more likely you are to suffer chronic pain. This might be due to a bias in our study cohort, as the mean age in the JIA group is significantly lower compared to the chronic pain group.
+**Gender**- females are 91% less likely to suffer JIA vs. chronic pain, relative to males. In our cohort females were much more likely to suffer chronic pain compared to males.   
+**Time from diagnosis**- each additional year since diagnosis decreases the odd of JIA by 23%.   
+**Depression**- each 1 unit increase in the depression score decreases the odd of JIA in 16%.  
+**Pain behavior**- each 1 unit increase in pain behavior score increase the odd of JIA by 3.54 times.  
+
+# 3. Widespread pain
+We explored the associations between widespread pain (number of painful body locations) and the following pain-related variables: depression, fatigue, pain, interference, pain behavior and pain catastrophizing scale, with a possible moderation by diagnosis (chronic pain/ JIA).  
+First, we'll plot widespread pain against our pain-related variables: 
+
+```{r}
+
+depr<-ggplot(data, aes(x=depression, y=wspain))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+ #facet_grid(.~Gender)
+  ylab("Widespread pain")+
+  xlab("Depression")
+
+fati<-ggplot(data, aes(x=fatigue, y=wspain))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+#facet_grid(.~Gender)
+  xlab("fatigue")+
+  ylab("Widespread pain")
+
+intens<-ggplot(data, aes(y=wspain, x=pain_intensity1))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain intensity (0-10)")
+
+
+beha<-ggplot(data, aes(y=wspain, x=pain_behavior))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain behavior")
+
+intf<-ggplot(data, aes(y=wspain, x=interference))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Interference")
+
+pcs<-ggplot(data, aes(y=wspain, x=pcs))+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain catastrophizing scale")
+
+library(gridExtra)
+grid.arrange(depr, fati, ncol=2)
+grid.arrange(intens, beha, ncol=2)
+grid.arrange(intf, pcs, ncol=2)
+```
+Looking at the correlations between widespread pain and the aforementioned variables, we can note strong positive correlations across the board.  
+It should be noted that the confidence intervals (grey-shaded areas) are wider for the higher values of widespread pain, as there were fewer observations there, and so we should be careful if making assumptions based on these areas of the graph.
+
+Since all the graphs appear to be approximately linear, linear regression was used to test these associations. As can be expected, all 6 pain-related variables had a statistically significant correlation to widespread pain with a p-value<0.001 (regression details summarized in table below).   
+We can conclude that high widespread pain is correlated to higher depression, fatigue, pain intensity, pain catastrophizing, pain behavior and interference in daily activities.   
+```{r}
+model<-lm(wspain~depression, data=data)
+d<-summary(model)
+model<-lm(wspain~fatigue, data=data)
+f<-summary(model)
+model<-lm(wspain~pain_intensity1, data=data)
+i1<-summary(model)
+model<-lm(wspain~pain_behavior, data=data)
+b<-summary(model)
+model<-lm(wspain~interference, data=data)
+i2<-summary(model)
+model<-lm(wspain~pcs, data=data)
+p<-summary(model)
+
+d<-round(d$coefficients[2,], digits=2)
+f<-round(f$coefficients[2,], digits=2)
+i1<-round(i1$coefficients[2,], digits=2)
+b<-round(b$coefficients[2,], digits=2)
+i2<-round(i2$coefficients[2,], digits=2)
+p<-round(p$coefficients[2,], digits=2)
+
+regtab<-cbind(d,f,i1,b,i2,p)
+knitr::kable(regtab, align="l", caption="Summary of correlation testing models", col.names = c("Depression", "Fatigue", "Pain intensity", "Pain behavior", "Interference", "PCS")) #row.names=
+```
+
+## Moderation by diagnosis
+We'll take a closer look at the correlations between widespread pain and the pain-related variables, with diagnosis as a possible moderator.
+
+### Depression
+```{r }
+ggplot(data, aes(x=depression, y=wspain, color=Diagnosis))+geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+ #facet_grid(.~Gender)
+  ylab("Widespread pain")+
+  xlab("Depression")+ggtitle("Depression vs. widespread pain, by diagnosis")
+```
+
+The scatter plot and trend lines show that diagnosis is a possible moderator.   
+Chronic pain patients demonstrate a strong positive linear correlation between depression and widespread pain.   
+For JIA patients data is scarce for depression levels higher than 20, and the confidence interval is wider. The trend seems square root-like or quadratic.  
+Subgroup analysis will allow us to fit the most accurate model for each group by using 2 different formulas. The data set was divided in two based on diagnosis. A linear regression model with a direct correlation was used for the chronic pain group, and a linear model with a square root formula was used for the JIA group.
+```{r}
+jdata<-data%>% filter(data$Diagnosis=="JIA")
+cdata<-data%>% filter(data$Diagnosis=="Chronic pain condition")
+
+mc<-lm(wspain~depression, data=cdata)
+tab_model(mc, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE,  
+          #show.aic=TRUE, #show.dev=TRUE,
+          show.se=TRUE,
+          title="Chronic pain: Correlation of widespread pain and depression",
+         pred.labels =c("(Intercept)", "Depression"))
+```
+**Chronic pain**: The correlation between depression and widespread pain is statistically significant (p-value<0.001), with an estimated slope of 0.64 (SE=0.16). This means that for chronic pain patients, each 1 unit increase in depression score is correlated to 0.64 increase in widespread pain. 
+
+```{r}
+mj<-lm(wspain~sqrt(depression), data=jdata)
+tab_model(mj, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="JIA:Correlation of widespread pain and depression",
+         pred.labels =c("(Intercept)", "Depression(sqrt)"))
+```
+**JIA**: The correlation between widespread pain and the square root of depression is statistically significant (p-value=0.005), with an estimated slope of 0.96 (SE=0.34). This means that each x units increase in depression score is correlated to a $0.96*\sqrt(x)$ increase in widespread pain.     
+
+### Fatigue
+```{r }
+ggplot(data, aes(x=fatigue, y=wspain, color=Diagnosis))+geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+#facet_grid(.~Gender)
+  xlab("Fatigue")+
+  ylab("Widespread pain")+ggtitle("Fatigue vs. widespread pain, by diagnosis")
+```
+The scatter plot and trend lines show that diagnosis is a possible moderator. Both chronic pain and JIA group show a positive linear correlation between depression and widespread pain. 
+We used subgroup analysis with linear regression to test these correlations.
+```{r}
+mc<-lm(wspain~fatigue, data=cdata)
+tab_model(mc, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE,  
+          #show.aic=TRUE, #show.dev=TRUE,
+          show.se=TRUE,
+          title="Chronic pain: Correlation of widespread pain and fatigue",
+         pred.labels =c("(Intercept)", "Depression"))
+
+mj<-lm(wspain~fatigue, data=jdata)
+tab_model(mj, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE,  
+          #show.aic=TRUE, #show.dev=TRUE,
+          show.se=TRUE,
+          title="JIA: Correlation of widespread pain and fatigue",
+         pred.labels =c("(Intercept)", "Depression"))
+```
+The correlation between fatigue and widespread pain is statistically significant for both groups (p-value<0.001), with an estimated slope of 0.5 (SE=0.12) for chronic pain and 0.28 (SE= 0.05) for JIA. Again, the correlation between fatigue and widespread pain is stronger for the chronic group compared to the JIA group.
+
+### Pain intensity
+```{r}
+ggplot(data, aes(y=wspain, x=pain_intensity1, color=Diagnosis))+geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain intensity (0-10)")+
+  ggtitle("Pain intensity vs. widespread pain, by diagnosis")
+```
+In this graph as well we can see a discrepancy in the trends of chronic pain and JIA.   
+The chronic pain group seem to exhibit a quadratic correlation while the JIA group has a square root-like trend. We will use subgroup analysis with appropriate linear regression models to investigate these correlations.
+```{r}
+mc<-lm(wspain~I(pain_intensity1^2), data=cdata)
+tab_model(mc, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE,  
+          #show.aic=TRUE, #show.dev=TRUE,
+          show.se=TRUE,
+          title="Chronic pain: Correlation of widespread pain and pain intensity",
+         pred.labels =c("(Intercept)", "Pain intensity^2"))
+```
+**Chronic pain**: The correlation between the quadratic formula of pain intensity and widespread pain is statistically significant (p-value<0.001), with an estimated slope of 0.37 (SE=0.05). This means that for chronic pain patients, each x units increase in pain intensity score is correlated to  increase of $0.37*X^2$ in widespread pain. 
+
+```{r}
+mj<-lm(wspain~sqrt(pain_intensity1), data=jdata)
+tab_model(mj, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="JIA:Correlation of widespread pain and pain intensity",
+         pred.labels =c("(Intercept)", "Pain intensity (sqrt)"))
+```
+**JIA**: The correlation between widespread pain and the square root of pain intensity is statistically significant (p-value<0.001), with an estimated slope of 4.05 (SE=0.67). This means that each x units increase in pain intensity is correlated to the increase of $4.05*\sqrt(x)$ in widespread pain.
+
+### Pain behavior
+```{r}
+ggplot(data, aes(y=wspain, x=pain_behavior, color=Diagnosis))+geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain behavior")+
+  ggtitle("Pain beahvior vs. widespread pain, by diagnosis")
+
+```
+Both groups demonstrate a similar trend in the correlation between pain behavior and widespread pain. The correlation seems square root-like, and was tested with linear regression with an interaction between the square root of pain behavior and diagnosis, and also with a model with an interaction between diagnosis and pain behavior
+```{r}
+m1<-lm(wspain~Diagnosis*sqrt(pain_behavior), data=data)
+m2<-lm(wspain~Diagnosis*pain_behavior, data=data)
+tab_model(m1, m2, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="Correlation of widespread pain and pain behavior, by diagnosis",
+         pred.labels =c("(Intercept)", "Diagnosis JIA", "Pain behavior (sqrt)", "Diagnosis:pain behavior (sqrt)", "Pain behavior", "Diagnosis:pain behavior"))
+
+```
+The interaction between diagnosis and the quadratic formula of pain behavior was borderline (p-value=0.058) and not statistically significant, as was the interaction of diagnosis and pain behavior. This means that the difference between the groups is not significant, and diagnosis is not a moderator in this case.
+
+### Interference
+```{r}
+ggplot(data, aes(y=wspain, x=interference, color=Diagnosis))+ geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Interference")+
+  ggtitle("Interference vs. widespread pain, by diagnosis")
+```
+For interference vs. widespread pain the chronic pain group's trend seems quadratic while the JIA group's seems square root-like (similarly to pain intensity).  
+We fitted 2 linear models with the respective formulas.  
+```{r}
+mc<-lm(wspain~I(interference^2), data=cdata)
+tab_model(mc, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE,  
+          #show.aic=TRUE, #show.dev=TRUE,
+          show.se=TRUE,
+          title="Chronic pain: Correlation of widespread pain and interference",
+         pred.labels =c("(Intercept)", "interference^2"))
+```
+**Chronic pain**: The correlation between the quadratic formula of interference and widespread pain is statistically significant (p-value<0.001), with an estimated slope of 0.02 (SE=0.00). This means that for chronic pain patients, each x units increase in pain intensity score is correlated to  increase of $0.02*X^2$ in widespread pain. 
+
+```{r}
+mj<-lm(wspain~sqrt(interference), data=jdata)
+tab_model(mj, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="JIA:Correlation of widespread pain and interference",
+         pred.labels =c("(Intercept)", "interference (sqrt)"))
+```
+**JIA**: The correlation between widespread pain and the square root of interference is statistically significant (p-value<0.001), with an estimated slope of 1.88 (SE=0.28). This means that each x units increase in pain intensity is correlated to the increase of $1.88*\sqrt(x)$ in widespread pain.
+
+### Pain Catastrophizing Scale
+```{r}
+
+ggplot(data, aes(y=wspain, x=pcs, color=Diagnosis))+geom_point()+
+  geom_smooth(method = 'loess',span =2, na.rm=TRUE)+
+  ylab("Widespread pain")+
+  xlab("Pain catastrophizing scale")+
+  ggtitle("PCS vs. widespread pain, by diagnosis")
+
+
+```
+For PCs vs. widespread pain the chronic pain group graph conforms to the square root function. The JIA group's data was modeled with a quadratic, square root and linear formulas, and the best fit was achieved with the linear formula.
+```{r}
+mc<-lm(wspain~sqrt(pcs), data=cdata)
+tab_model(mc, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="JIA:Correlation of widespread pain and PCS",
+         pred.labels =c("(Intercept)", "PCS (sqrt)"))
+```
+**Chronic pain**: The correlation between widespread pain and the square root of PCS is statistically significant (p-value<0.001), with an estimated slope of 12.57 (SE=2.85). This means that each x units increase in PCS is correlated to the increase of $12.57*\sqrt(x)$ in widespread pain.
+```{r}
+mj<-lm(wspain~pcs, data=jdata)
+tab_model(mj, show.ci = FALSE, show.re.var= FALSE, show.r2=FALSE, 
+          show.se=TRUE,
+          #show.aic=TRUE, #show.dev=TRUE,
+          title="JIA:Correlation of widespread pain and PCS",
+         pred.labels =c("(Intercept)", "PCS"))
+```
+**JIA**: The correlation between widespread pain and the PCS is statistically significant (p-value<0.001), with an estimated slope of 2.25 (SE=0.61). This means that each 1 unit increase in PCS is correlated to the increase of 2.25 in widespread pain.
+
+
+## Conclusions and limitations
+Diagnosis was found to be a statistically significant moderator of the correlation of widespread pain with pain-related variables depression, fatigue, pain intensity, interference and PCS. All correlations were positive, with chronic pain having larger slopes compared to JIA for all variables.
+```{r}
+var<-c("Depression", "", "Fatigue", "", "Pain intensity", "", "Interference", "", "PCS", "")
+diag<-c("Chronic pain", "JIA","Chronic pain", "JIA","Chronic pain", "JIA","Chronic pain", "JIA","Chronic pain", "JIA")
+slope<-c("0.64 (0.16)", "0.96 (0.34)", "0.5 (0.12)", "0.28 (0.05)", "0.37 (0.05)", "4.05 (0.67)", "0.02 (0.00)", "1.88 (0.28)", "12.57 (2.85)", "2.25 (0.61)")
+rela<-c("Linear", "Square root", "Linear", "Linear", "Quadratic", "Square root","Quadratic", "Square root", "Square root", "Linear")
+df<-data.frame(cbind(var, diag, slope, rela ))
+knitr::kable(df, col.names=c("Variable","Diagnosis", "Slope (SE)", "relationship"), caption="Summary of correlations between widespread pain and pain-related variables by diagnosis" )
+```
+
+### Study limitations
+The 2 diagnosis groups, chronic pain and JIA, have distinct characteristics in regard to widespread pain. JIA patients had a smaller range of widespread pain (range 0-35, median=4) compared to chronic pain patients (range 0-61, median=20). This pattern was also noticeable for other pain-related variables, where there were sparse data for JIA patients with higher scores. This may indicate that high widespread pain is more prevalent in chronic pain patients. Another possibility is that this study's cohort did not include a sufficient amount of JIA patients with higher widespread pain.   
+Further study may ascertain the prevalence of high widespread pain in JIA patients, and its correlation to pain-related variables.
+
+# Appendix- table summary of comorbidities in the CHOP cohort
+```{r}
+######### Todo: create tables and report findings
+comorb<-data %>% filter(from_set=="CHOP")#%>% select(6:26)
+comorb<-comorb[,c(6:15, 17:26)]
+#converting logical columns to numeric
+cols <- sapply(comorb, is.logical)
+comorb[,cols] <- lapply(comorb[,cols], as.numeric)
+comorb[is.na(comorb)] <- 0
+#summing comorbidities for each subject
+#data$new <- rowSums(data[43:167])
+comorb$total<- rowSums(comorb)
+t<-table(comorb$total)
+knitr::kable(t, col.names=c("Total comorbidities per subject", "Count"), align = "l", 
+             caption="Distribution of comorbidites in the CHOP cohort (n=138)" )
+
+#summing cases for each comorbidity
+cases<-sort(sapply(comorb, sum))
+cases<-data.frame(cases)
+knitr::kable(cases, col.names=c("Number of cases"), align = "l", caption="Prevalence of comorbidites in the CHOP cohort (n=138)" )
+
+```
