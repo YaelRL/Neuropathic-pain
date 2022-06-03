@@ -1,5 +1,5 @@
 ---
-title: 'Biostatistics project: Neuropathic pain'
+title: 'Neuropathic pain'
 author: "Yael Rosen Lang"
 date: "10/17/2021"
 output:
@@ -26,8 +26,10 @@ library(caret)
 library(gridExtra)
 panderOptions("table.split.cells", Inf)
 library("readxl")
-data=read_excel(path='F:/My Documents/MPH/Biostatistics_projects/Neuropathic_Pain_Data.xlsx', na=c("-99", "NA"))
+
+data=read_excel(path='C:/Users/user/Desktop/yael/MPH/Biostatistics_projects/1 Neuropain/Neuropathic_Pain_Data.xlsx', na=c("-99", "NA"))
 ```
+### By: Yael Rosen Lang
 
 # Introduction  
 This study's goal is to investigate aspects of well being, health and pain in children and teenagers with neuropathic pain.  
